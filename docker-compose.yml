@@ -1,0 +1,127 @@
+services:
+  # ---------- HDFS ---------- 2
+  namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: namenode
+    environment:
+      CLUSTER_NAME: local
+      CORE_CONF_fs_defaultFS: hdfs://namenode:9000
+      HDFS_CONF_dfs_replication: 1
+      HDFS_CONF_dfs_permissions_enabled: "false"
+    ports: ["9870:9870", "9000:9000"]
+    volumes:
+      - namenode_data:/hadoop/dfs/name
+    networks: [etl]
+
+  datanode:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: datanode
+    environment:
+      SERVICE_PRECONDITION: "namenode:9870"
+      CORE_CONF_fs_defaultFS: hdfs://namenode:9000
+      HDFS_CONF_dfs_replication: 1
+      HDFS_CONF_dfs_permissions_enabled: "false"
+    ports: ["9866:9866","9864:9864"]
+    volumes:
+      - datanode_data:/hadoop/dfs/data
+    networks: [etl]
+
+  # ---------- Spark ---------- 2
+  spark-master:
+    image: bitnamilegacy/spark:3.5.1
+    container_name: spark-master
+    environment:
+      SPARK_MODE: master
+      SPARK_MASTER_HOST: spark-master
+      HADOOP_USER_NAME: root
+    ports: ["8080:8080", "7077:7077"]
+    volumes:
+      - ./hadoop/core-site.xml:/opt/bitnami/spark/conf/core-site.xml
+      - ./jobs:/opt/jobs
+    networks: [etl]
+
+  spark-worker:
+    image: bitnamilegacy/spark:3.5.1
+    container_name: spark-worker
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      HADOOP_USER_NAME: root
+    volumes:
+      - ./hadoop/core-site.xml:/opt/bitnami/spark/conf/core-site.xml
+      - ./jobs:/opt/jobs
+    networks: [etl]
+
+  # ---------- Airflow ---------- 2
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    networks: [etl]
+
+  airflow:
+    build: ./airflow
+    container_name: airflow
+    depends_on: [postgres, spark-master]
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+      AIRFLOW__WEBSERVER__SECRET_KEY: "local-dev-secret"
+      AIRFLOW_CONN_SPARK_DEFAULT: '{"conn_type":"spark","host":"spark://spark-master","port":7077}'
+      HADOOP_USER_NAME: root
+            # Credentials for the seeded admin user
+      _AIRFLOW_WWW_USER_USERNAME: "admin"
+      _AIRFLOW_WWW_USER_PASSWORD: "admin"
+      _AIRFLOW_WWW_USER_FIRSTNAME: "Admin"
+      _AIRFLOW_WWW_USER_LASTNAME: "User"
+      _AIRFLOW_WWW_USER_EMAIL: "admin@example.com"
+      _AIRFLOW_WWW_USER_ROLE: "Admin"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./hadoop/core-site.xml:/opt/hadoop/conf/core-site.xml
+      - ./hadoop/core-site.xml:/opt/spark/conf/core-site.xml
+      - ./jobs:/opt/jobs
+    ports: ["8081:8080"]
+    command: >
+      bash -c "airflow db migrate &&
+           airflow users create
+               --username $${_AIRFLOW_WWW_USER_USERNAME}
+               --password $${_AIRFLOW_WWW_USER_PASSWORD}
+               --firstname $${_AIRFLOW_WWW_USER_FIRSTNAME}
+               --lastname $${_AIRFLOW_WWW_USER_LASTNAME}
+               --role $${_AIRFLOW_WWW_USER_ROLE}
+               --email $${_AIRFLOW_WWW_USER_EMAIL} ||
+           echo 'user already exists, continuing' &&
+           (airflow scheduler &) &&
+           airflow webserver"
+    networks: [etl]
+
+  # ---------- Jupyter Notebook -------------- 1
+    
+  jupyter:
+    image: jupyter/pyspark-notebook:latest
+    container_name: jupyter
+    environment:
+      JUPYTER_TOKEN: "unab4sis555"
+      SPARK_LOCAL_IP: "127.0.0.1"
+      
+    ports: ["8888:8888"]
+    volumes:
+      - ./work:/home/jovyan/work
+
+      
+    networks: [etl]
+
+networks:
+  etl:
+
+volumes:
+  namenode_data:
+  datanode_data:
+
+
+ 
